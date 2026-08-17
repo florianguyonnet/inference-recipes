@@ -53,6 +53,10 @@ async def stream_completion(
         "max_tokens": max_tokens,
         "temperature": 0.0,
         "stream": True,
+        # Always decode the full budget. Without it the greedy continuation can
+        # emit EOS after one token, and TPOT/throughput stop being comparable
+        # between two serving configs.
+        "ignore_eos": True,
     }
 
     async with session.post(

@@ -36,6 +36,10 @@ def measure(url: str, model: str, prompt: str, tokens: int) -> float:
         "top_p": 0.95,
         "stream": True,
         "stream_options": {"include_usage": True},
+        # Decode exactly `tokens` every time. Without it a run that stops early
+        # is averaged over a shorter, warmer window, which is a large part of the
+        # run-to-run swing that made earlier sweeps unreadable.
+        "ignore_eos": True,
     }
     req = urllib.request.Request(
         f"{_args.url}/v1/chat/completions",

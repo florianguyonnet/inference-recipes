@@ -1,0 +1,30 @@
+# MMLU-Pro, 0-shot CoT, stride subset, no stop strings.
+# 10 choices per question (random = 10%), so a broken quantization shows up as
+# a large drop instead of the 1-2 points MMLU has left above its ceiling.
+task: mmlu_pro_lite
+dataset_path: TIGER-Lab/MMLU-Pro
+test_split: test
+process_docs: !function utils.mmlu_pro_subset
+output_type: generate_until
+doc_to_text: !function utils.mmlu_pro_doc_to_text
+doc_to_target: answer
+num_fewshot: 0
+generation_kwargs:
+  until: []
+filter_list:
+  # Last "the answer is (X)" in the reply. Non-matches become [invalid] and are
+  # reported separately by run_eval.sh: they mean truncated, not wrong.
+  - name: answer-is
+    filter:
+      - function: regex
+        regex_pattern: 'answer is \(?([A-J])\)?'
+        group_select: -1
+      - function: take_first
+metric_list:
+  - metric: exact_match
+    aggregation: mean
+    higher_is_better: true
+    ignore_case: true
+    ignore_punctuation: true
+metadata:
+  version: 1.0

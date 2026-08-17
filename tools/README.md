@@ -14,6 +14,7 @@ Engine-agnostic clients that work against any OpenAI-compatible server (vLLM, SG
 |---|---|
 | `benchmark_agent.py` | TTFT / TPOT / throughput with `--concurrency` support |
 | `probe_decode.py` | Solo decode tok/s on fixed prompts (client-side, spec-decode safe) |
+| `probe_ppl.py` | Perplexity on fixed text — deterministic calibration canary |
 | `test_tool_call.py` | OpenAI `tool_calls` schema validation |
 | `test_vision.py` | Vision-tower smoke test (synthetic digit image) |
 
@@ -24,23 +25,31 @@ Engine-agnostic clients that work against any OpenAI-compatible server (vLLM, SG
 
 ## Accuracy suite
 
-`run_eval.sh` runs the same protocol at the end of every recipe, so scores are comparable across engines/configs:
-
-| Task | Metric | Size |
-|---|---|---|
-| `gsm8k_cot` | exact_match (flexible-extract) | full 1319 |
-| `mmlu_flan_cot_zeroshot` | acc (flexible-extract) | 1700 |
-| `aime25` | exact_match | full 30 |
-
 ```bash
-./run_eval.sh [url] [model] [gsm8k_limit] [mmlu_limit]
+./run_eval.sh [url] [model] [smoke|full]      # default: localhost:8000, smoke
 ```
 
-Conventions:
+| Tier | Runs | Size | Time |
+|---|---|---|---|
+| `smoke` | `probe_ppl.py`, `gsm8k_cot_lite` | 5.7k tokens, 200 q | ~6 min |
+| `full` | + `mmlu_pro_lite`, `aime25_boxed` | 251 q, 30 problems | ~1 h |
 
-- Sampling: `temperature=0.6, top_p=0.95, top_k=20` — the Qwen reasoning settings. Greedy on long generations is a known repetition-loop failure mode for reasoning models.
-- `max_tokens` is long on purpose (8192; 32768 for AIME): Qwen3.8 reasons a lot and truncated traces score as wrong.
-- **We report flexible-extract only.** strict-match is meaningless here by design: our servers run `--reasoning-parser qwen3`, so the thinking trace (where the `####` answer marker lives) is split off into `reasoning_content` and never reaches the scorer.
-- A 8-concurrency full suite takes ~1 h against a dual-RTX-5090 server.
+Every task reports the score *and* the number of replies with no extractable
+answer. The second number is the one that moves first when a serving config
+damages the model: truncated or looping traces, not wrong answers.
 
-Reference on the SGLang + DSpark recipe (dual RTX 5090): gsm8k_cot flexible-extract **0.92** (50-example sanity subset).
+Task configs live in `tasks/`: no stop strings, a `max_tokens` budget sized for a
+thinking trace (8k gsm8k, 16k MMLU-Pro, 64k AIME), `\boxed{}` / `the answer is (X)`
+extraction, non-matches marked `[invalid]`.
+
+The upstream `gsm8k_cot`, `mmlu_flan_cot_zeroshot` and `aime25` configs are
+written for completion-style models: they stop generation on `"Q:"` /
+`"Question:"` and cap the budget at 2k tokens. With `--reasoning-parser` the
+trace goes to the `reasoning` field, so a reply cut mid-thought reaches the
+scorer as an empty string and counts as wrong. Measured on Qwen3.8-27B-NVFP4:
+`mmlu_flan_cot_zeroshot` 0.6166 with 27% of replies stopped after 6-17 tokens,
+`aime25` 0.60 with 8/30 traces over the 32k budget.
+
+- Sampling: `temperature=1.0, top_p=0.95, top_k=20, min_p=0` (checkpoint card, thinking mode), same for every recipe. What a recipe pins as its own serving default is a separate decision.
+- `MMLU_PRO_STRIDE` sets the MMLU-Pro subset (48 → 251 questions). The test split is grouped by category, so `--limit` alone only samples `business`.
+- `probe_ppl.py` needs GPU headroom: `prompt_logprobs` allocates ~0.6 MB of fp32 logits per prompt token, and at `--gpu-memory-utilization 0.94` a 2.5k-token echo request OOMs the engine.

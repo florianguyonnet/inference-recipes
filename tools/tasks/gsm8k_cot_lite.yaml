@@ -1,0 +1,27 @@
+# GSM8K, 0-shot, no stop strings, last number in the reply is the answer.
+# The smoke test: a config that damages the model drops here immediately.
+task: gsm8k_cot_lite
+dataset_path: openai/gsm8k
+dataset_name: main
+test_split: test
+output_type: generate_until
+doc_to_text: !function utils.gsm8k_doc_to_text
+doc_to_target: !function utils.gsm8k_doc_to_target
+num_fewshot: 0
+generation_kwargs:
+  until: []
+filter_list:
+  - name: last-number
+    filter:
+      - function: regex
+        regex_pattern: '(-?\d[\d,]*)'
+        group_select: -1
+      - function: take_first
+metric_list:
+  - metric: exact_match
+    aggregation: mean
+    higher_is_better: true
+    ignore_case: true
+    ignore_punctuation: true
+metadata:
+  version: 1.0
