@@ -58,4 +58,8 @@ for f in "${SNAPSHOT_DIR}"/*; do
 done
 cp "${PATCHED_CONFIG}" "${OVERLAY_DIR}/config.json"
 
+# generation_config.json stays symlinked: its temperature 1.0 / top_p 0.95 /
+# top_k 20 is the thinking-mode config the model card recommends, and vLLM
+# applies it to requests that send no sampling params.
+
 echo "==> Done: ${linked} files symlinked (relative), patched config.json copied."

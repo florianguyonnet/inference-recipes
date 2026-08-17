@@ -4,7 +4,8 @@ set -euo pipefail
 # Start the vLLM server (Docker) for Qwen3.8-27B-NVFP4 at 512k context.
 #
 # Usage: ./scripts/start.sh [profile.env]   (default: profiles/qwen-full.env)
-# Config layers: .env -> profile -> environment.
+# Config layers: environment -> .env -> profile (the profile wins; put sweep
+# overrides in a profile copy, not in the environment).
 # First start downloads the checkpoint into the mounted HF cache (~23 GiB).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -57,20 +58,19 @@ ARGS=(
     --host "${VLLM_HOST:-0.0.0.0}"
     --port "${PORT}"
     --tensor-parallel-size "${TENSOR_PARALLEL_SIZE:-2}"
-    --dtype bfloat16
     --kv-cache-dtype fp8_e4m3
     --attention-backend "${ATTENTION_BACKEND:-flashinfer}"
     --max-model-len "${MAX_MODEL_LEN:-524288}"
-    --max-num-seqs "${MAX_NUM_SEQS:-8}"
+    --max-num-seqs "${MAX_NUM_SEQS:-16}"
     --max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS:-8192}"
     --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION:-0.94}"
     --safetensors-load-strategy prefetch
-    --enable-chunked-prefill
     --enable-prefix-caching
     --reasoning-parser qwen3
     --tool-call-parser qwen3_coder
     --enable-auto-tool-choice
 )
+[[ -n "${KV_CACHE_MEMORY:-}" ]] && ARGS+=(--kv-cache-memory "${KV_CACHE_MEMORY}")
 # QUANTIZATION stays unset: the unsloth checkpoint is compressed-tensors
 # (NVFP4 W4A4 MLP + FP8 attention), auto-detected from config.json.
 [[ -n "${QUANTIZATION:-}" ]] && ARGS+=(--quantization "${QUANTIZATION}")
@@ -104,6 +104,22 @@ docker run -d \
     -m vllm.entrypoints.openai.api_server "${ARGS[@]}" \
     >/dev/null
 
+# A few batched requests before the server takes traffic: vLLM JIT-compiles some
+# Triton kernels on first use (batch_memcpy_kernel), which lands as a latency
+# spike on a real request otherwise.
+warmup() {
+    local filler payload i
+    filler="$(printf 'The quick brown fox jumps over the lazy dog. %.0s' $(seq 1 200))"
+    payload="$(printf '{"model":"%s","messages":[{"role":"user","content":"%s Reply with OK."}],"max_tokens":32,"temperature":1.0}' \
+        "${SERVED_MODEL_NAME:-Qwen3.8-27B-NVFP4}" "${filler}")"
+    echo "==> Warming up (4 batched requests)..."
+    for i in 1 2 3 4; do
+        curl -fsS --max-time 180 "http://localhost:${PORT}/v1/chat/completions" \
+            -H 'Content-Type: application/json' -d "${payload}" >/dev/null 2>&1 &
+    done
+    wait
+}
+
 echo "==> Container started. Waiting for http://localhost:${PORT}/health ..."
 echo "    (warm start ~2.5 min, cold ~6 min; follow with: docker logs -f ${NAME})"
 for i in $(seq 1 180); do
@@ -114,6 +130,7 @@ for i in $(seq 1 180); do
     fi
     if curl -fsS --max-time 5 "http://localhost:${PORT}/health" >/dev/null 2>&1; then
         echo "==> Server is UP on :${PORT} (model: ${SERVED_MODEL_NAME:-Qwen3.8-27B-NVFP4})"
+        warmup
         exit 0
     fi
     sleep 5

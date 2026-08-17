@@ -4,7 +4,8 @@ set -euo pipefail
 # Start the SGLang server (Docker) for Qwen3.8-27B-NVFP4.
 #
 # Usage: ./scripts/start.sh [profile.env]   (default: profiles/tp2-dspark.env)
-# Config layers: .env -> profile -> environment.
+# Config layers: environment -> .env -> profile (the profile wins; put sweep
+# overrides in a profile copy, not in the environment).
 # First start downloads the checkpoints into the mounted HF cache (~19 GB).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -124,11 +125,16 @@ esac
 
 echo "==> Starting ${NAME} (${IMAGE}) TP=${TP:-2} SPEC=${SPEC:-dspark} on :${PORT}"
 
+DOCKER_EXTRA=()
+# --privileged is only needed for zero-copy vision (cuda_ipc between host and
+# container); the default cpu transport does not need it.
+[[ "${MM_TRANSPORT:-cpu}" == "cuda_ipc" ]] && DOCKER_EXTRA+=(--privileged)
+
 docker run -d \
     --name "${NAME}" \
     --network host \
     --ipc host \
-    --privileged \
+    "${DOCKER_EXTRA[@]+"${DOCKER_EXTRA[@]}"}" \
     --gpus "${GPUS:-all}" \
     --shm-size 32g \
     -e HF_HOME=/root/.cache/huggingface \
