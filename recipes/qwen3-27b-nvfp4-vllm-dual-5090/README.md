@@ -20,6 +20,22 @@ cp .env.example .env
 
 OpenAI-compatible API on `http://<host>:8000/v1`, model id `Qwen3.8-27B-NVFP4`. `./scripts/stop.sh` to stop.
 
+## Running it as a service
+
+The container carries `--restart unless-stopped` (boot and crash) and a
+`/health` healthcheck. Docker never acts on an unhealthy container, so two cron
+entries cover the rest:
+
+```cron
+# Nightly restart at 04:00 — full path: overlay rebuild, health wait, warmup.
+0 4 * * * { date; cd <recipe> && ./scripts/stop.sh && ./scripts/start.sh; } >> ~/vllm-prod.log 2>&1
+# Restart a wedged engine that keeps the port open (unhealthy after ~90 s).
+*/5 * * * * [ "$(docker inspect -f '{{.State.Health.Status}}' vllm-qwen 2>/dev/null)" = unhealthy ] && { date; cd <recipe> && ./scripts/stop.sh && ./scripts/start.sh; } >> ~/vllm-prod.log 2>&1
+```
+
+`docker ps` reports the health state; restarts are logged with a timestamp.
+Startup is ~2.5 min, during which the port refuses connections.
+
 ## Profiles
 
 | Profile | GPUs | Context |

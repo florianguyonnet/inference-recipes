@@ -86,6 +86,11 @@ docker run -d \
     --network host \
     --ipc host \
     --restart unless-stopped \
+    --health-cmd "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:${PORT}/health', timeout=5)\"" \
+    --health-interval 30s \
+    --health-timeout 10s \
+    --health-start-period 10m \
+    --health-retries 3 \
     --gpus "${GPUS:-all}" \
     -e HF_HOME=/root/.cache/huggingface \
     -e HF_XET_HIGH_PERFORMANCE=1 \
