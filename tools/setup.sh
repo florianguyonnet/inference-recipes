@@ -14,6 +14,6 @@ fi
 uv venv --python 3.12 "${TOOLS_DIR}/.venv"
 uv pip install --python "${TOOLS_DIR}/.venv/bin/python" \
     "lm-eval" \
-    aiohttp tenacity
+    aiohttp tenacity pillow
 
 echo "==> Done. Tools venv at ${TOOLS_DIR}/.venv"

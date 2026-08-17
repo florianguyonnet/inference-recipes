@@ -99,8 +99,9 @@ docker run -d \
     -e FLASHINFER_EXTRA_CUDAFLAGS="${FLASHINFER_EXTRA_CUDAFLAGS:--DCCCL_DISABLE_CTK_COMPATIBILITY_CHECK=1}" \
     -e MAX_JOBS="${MAX_JOBS:-4}" \
     -v "${HOST_HF}:/root/.cache/huggingface" \
+    --entrypoint python3 \
     "${IMAGE}" \
-    python3 -m vllm.entrypoints.openai.api_server "${ARGS[@]}" \
+    -m vllm.entrypoints.openai.api_server "${ARGS[@]}" \
     >/dev/null
 
 echo "==> Container started. Waiting for http://localhost:${PORT}/health ..."
