@@ -42,10 +42,12 @@ def load_chunks(chunk_chars: int, count: int) -> list[str]:
 
 
 def chunk_nll(url: str, model: str, text: str) -> tuple[float, int]:
+    # max_tokens=1, not 0: SGLang rejects 0. The single generated token is
+    # dropped below so both engines score exactly the prompt tokens.
     body = {
         "model": model,
         "prompt": text,
-        "max_tokens": 0,
+        "max_tokens": 1,
         "echo": True,
         "logprobs": 1,
         "temperature": 0,
@@ -64,8 +66,9 @@ def chunk_nll(url: str, model: str, text: str) -> tuple[float, int]:
             "--chunk-chars, or serve with --gpu-memory-utilization 0.90."
         ) from None
     logprobs = [lp for lp in resp["choices"][0]["logprobs"]["token_logprobs"] if lp is not None]
-    if not logprobs:
-        raise SystemExit("server returned no logprobs (needs echo+logprobs support)")
+    if len(logprobs) < 2:
+        raise SystemExit("server returned no prompt logprobs (needs echo+logprobs support)")
+    logprobs = logprobs[:-1]  # drop the generated token, keep the prompt only
     return -sum(logprobs), len(logprobs)
 
 

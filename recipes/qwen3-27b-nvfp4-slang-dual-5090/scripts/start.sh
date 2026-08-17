@@ -99,11 +99,6 @@ ARGS=(
 )
 [[ -n "${MAMBA_CACHE_SIZE:-}" ]] && ARGS+=(--max-mamba-cache-size "${MAMBA_CACHE_SIZE}")
 [[ -n "${MAX_RUNNING_REQUESTS:-}" ]] && ARGS+=(--max-running-requests "${MAX_RUNNING_REQUESTS}")
-# Escape hatch for sweep/tuning: EXTRA_FLAGS="--foo bar --baz" is split and appended.
-if [[ -n "${EXTRA_FLAGS:-}" ]]; then
-    # shellcheck disable=SC2206
-    ARGS+=(${EXTRA_FLAGS})
-fi
 
 case "${SPEC:-dspark}" in
     dspark)
@@ -112,7 +107,7 @@ case "${SPEC:-dspark}" in
         ARGS+=(
             --speculative-algorithm DSPARK
             --speculative-draft-model-path "${DSPARK_DRAFT_ID:-RadixArk/Qwen3.8-27B-DSpark}"
-            --speculative-dspark-block-size 7
+            --speculative-dspark-block-size "${DSPARK_BLOCK_SIZE:-7}"
             --speculative-draft-model-quantization unquant
             --speculative-draft-attention-backend "${DRAFT_ATTENTION_BACKEND:-flashinfer}"
             --linear-attn-verify-backend "${LINEAR_ATTN_VERIFY_BACKEND:-triton}"
@@ -122,6 +117,13 @@ case "${SPEC:-dspark}" in
     off|none|"") ;;
     *) echo "ERROR: unknown SPEC=${SPEC} (dspark|off)"; exit 1 ;;
 esac
+
+# Escape hatch for sweep/tuning, appended last so it wins over everything above:
+# EXTRA_FLAGS="--foo bar --baz" is split and appended.
+if [[ -n "${EXTRA_FLAGS:-}" ]]; then
+    # shellcheck disable=SC2206
+    ARGS+=(${EXTRA_FLAGS})
+fi
 
 echo "==> Starting ${NAME} (${IMAGE}) TP=${TP:-2} SPEC=${SPEC:-dspark} on :${PORT}"
 
