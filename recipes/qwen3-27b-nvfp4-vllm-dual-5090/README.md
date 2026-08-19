@@ -87,6 +87,14 @@ Run: `../../tools/run_eval.sh http://localhost:8000 Qwen3.8-27B-NVFP4`
 Measured KV cache at startup (TP=2, util 0.94, seqs 16): **1,053,188 tokens → 2.04x concurrency at 524,288 tokens**. Worst-case concurrency is 2x at full 512k.
 
 - **512k via YaRN**: `models/Qwen3.8-27B-NVFP4-yarn512k/config.json` sets `text_config.rope_parameters` to YaRN (`factor 2.0`, `original_max_position_embeddings 262144`, mrope/theta preserved). vLLM 0.27 dropped the `--rope-scaling` flag, so the patched config is the supported mechanism. `start.sh` builds the overlay: relative symlinks to the HF snapshot + this config, inside the mounted cache. YaRN is extrapolation: expect quality drift beyond 262k, the native trained range.
+- **Do not point another run at this cache by repo id.** The overlay follows
+  `refs/main`, and anything that resolves `unsloth/Qwen3.8-27B-NVFP4` against the
+  Hub in this cache moves that ref to the current revision — whose weights are
+  not downloaded. `make_yarn_overlay.sh` then built an overlay of configs with no
+  `*.safetensors` and the container crash-looped on `Cannot find any model
+  weights` (37 restarts before it was caught, 2026-08-19). The script now refuses
+  to build a weightless overlay; recovery is `download_model.sh` or writing a
+  complete snapshot hash back into `refs/main`.
 - **Startup time**: ~2.5 min warm, ~6 min cold. The container runs with `--restart unless-stopped`.
 - **MTP rejected** (vLLM 0.27.1): good draft acceptance (~2.4 tokens/step), but verifying speculative tokens on this hybrid GDN model rewinds recurrent state at ~4x per engine step. Net: 55 tok/s solo vs 96 without. Revisit if vLLM optimizes GDN state handling for spec decode.
 - **`--async-scheduling` rejected**: measured neutral (±0.3% on solo decode, 8/16/32 concurrent and 32k prefill).

@@ -43,6 +43,19 @@ if [[ ! -d "${SNAPSHOT_DIR}" ]]; then
     exit 1
 fi
 
+# refs/main follows the Hub: anything that resolves the repo id against the Hub
+# in this cache (a test run, a container fetching the repo id instead of the
+# overlay) moves it to a newer revision whose weights may not be downloaded.
+# Without this check the overlay is built from configs alone and vLLM crash-loops
+# on "Cannot find any model weights".
+if ! compgen -G "${SNAPSHOT_DIR}/*.safetensors" >/dev/null; then
+    echo "ERROR: no *.safetensors in ${SNAPSHOT_DIR}"
+    echo "       refs/main points at an incompletely downloaded revision."
+    echo "       Fix: ./scripts/download_model.sh, or point refs/main back at a"
+    echo "       complete snapshot under ${HF_HOME}/hub/${CACHE_NAME}/snapshots/."
+    exit 1
+fi
+
 echo "==> Overlay : ${OVERLAY_DIR}"
 echo "    Snapshot: ${SNAPSHOT_DIR}"
 
