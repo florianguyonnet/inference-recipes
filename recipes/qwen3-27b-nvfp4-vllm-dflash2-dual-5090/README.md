@@ -62,6 +62,13 @@ for the gap — untestable on 64 GB of VRAM, where the bf16 target does not fit.
 KV pool: 489,358 tokens with the drafter (util 0.88), 958,181 without (0.94).
 Startup ~4.5 min, of which ~70 s is CUDA-graph capture for target + drafter.
 
+**SGLang runs this drafter faster.** Same checkpoint, same drafter, in
+`../qwen3-27b-nvfp4-slang-dflash2-dual-5090`: 187 tok/s solo at 8k against 133
+here, and 624 at 8 concurrent against 301 — where this recipe is already behind
+its own no-drafter baseline. vLLM's DFlash2 path is days old; SGLang's DFlash
+lineage is a year older. This recipe is worth running for the 262k context with
+a full KV pool and the 16-concurrent shape, not for peak drafted throughput.
+
 ## Configuration notes
 
 | Setting | Value | Why |

@@ -2,6 +2,7 @@
 .env
 .venv/
 cache/
+cache
 logs/
 __pycache__/
 *.pyc
