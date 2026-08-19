@@ -5,10 +5,9 @@ on two RTX 5090, in Docker. DFlash2 landed on 2026-08-18 and is not in any
 released vLLM, so the image is the pinned nightly wheel plus the two open PRs
 (#52816, #52883), applied as a patch — no source rebuild.
 
-Solo decode: 133-144 tok/s, **1.8x** the same checkpoint without the drafter.
-The gain shrinks with load and turns negative past 4 concurrent requests: at 16
-concurrent the drafter costs 40% of throughput. Speed only — no accuracy suite
-was run.
+**This is the recipe in production** (port 8000, 262k context, since
+2026-08-19). Solo decode 131-139 tok/s, 1.8x the same checkpoint without the
+drafter, TPOT 5-6 ms and it stays at 9 ms under a 16-request burst.
 
 ## Requirements
 
@@ -22,59 +21,103 @@ was run.
 cp .env.example .env
 ./scripts/build.sh               # nightly + DFlash2 PRs, ~30 s
 ./scripts/download_model.sh      # optional: pre-stage target + drafter
-./scripts/start.sh               # default profile: dflash2-tp2, :8100
-./scripts/bench.sh dflash2       # speed suite -> results/dflash2/
+./scripts/start.sh               # default profile: dflash2-prod, :8000
+./scripts/bench.sh dflash2-prod  # speed suite -> results/dflash2-prod/
 ```
 
-OpenAI-compatible API on `http://<host>:8100/v1`, model id `Qwen3.8-27B-NVFP4`.
-`./scripts/stop.sh` to stop. Port 8100 keeps it clear of the plain vLLM recipe
-on 8000, but both need the two GPUs: run one at a time.
+OpenAI-compatible API on `http://<host>:8000/v1`, model id `Qwen3.8-27B-NVFP4`.
+`./scripts/stop.sh` to stop. The profile passed to `start.sh` wins over `.env`.
 
 ## Profiles
 
-| Profile | Drafter | Notes |
+| Profile | Shape | For |
 |---|---|---|
-| `dflash2-tp2` (default) | DFlash2, 7 draft tokens | `--gpu-memory-utilization 0.88` |
-| `nospec-tp2` | off | the baseline the table below compares against |
+| `dflash2-prod` (default) | util 0.92, `max-num-seqs 4`, :8000 | production: latency first |
+| `dflash2-tp2` | util 0.88, `max-num-seqs 16`, :8100 | aggregate throughput, the reference bench shape |
+| `nospec-tp2` | no drafter, util 0.94, :8100 | the baseline the tables below compare against |
+
+## Running it as a service
+
+The container carries `--restart unless-stopped` (boot and crash) and a
+`/health` healthcheck. Docker never acts on an unhealthy container, so two cron
+entries cover the rest:
+
+```cron
+# Nightly restart at 04:00 — stop + start: health wait, then warmup.
+0 4 * * * { date; cd <recipe> && ./scripts/stop.sh && ./scripts/start.sh; } >> ~/vllm-prod.log 2>&1
+# Restart a wedged engine that keeps the port open (unhealthy after ~90 s).
+*/5 * * * * [ "$(docker inspect -f '{{.State.Health.Status}}' vllm-dflash2 2>/dev/null)" = unhealthy ] && { date; cd <recipe> && ./scripts/stop.sh && ./scripts/start.sh; } >> ~/vllm-prod.log 2>&1
+```
+
+Startup is ~4.5 min, during which the port refuses connections. Rollback is the
+no-drafter 512k recipe next door (`../qwen3-27b-nvfp4-vllm-dual-5090`, container
+`vllm-qwen`): stop this one first, both want the two GPUs.
 
 ## Measured performance
 
 `tools/benchmark_agent.py`, TP=2, 262k context, fp8 KV, 256 output tokens, same
-checkpoint and same image in both columns. Concurrent requests share the prompt,
+checkpoint and same image in every column. Concurrent requests share the prompt,
 so they hit the prefix cache.
 
-| Scenario | no drafter | DFlash2 | |
+| Scenario | no drafter | DFlash2, prod shape | DFlash2, throughput shape |
 |---|---|---|---|
-| 1 req, 2k prompt | 82 tok/s (TPOT 11 ms) | **144 tok/s** (5 ms) | 1.76x |
-| 1 req, 8k prompt | 73 tok/s (11 ms) | **133 tok/s** (5 ms) | 1.82x |
-| 2 par, 8k prompt | 131 tok/s (14 ms) | **196 tok/s** (7 ms) | 1.49x |
-| 4 par, 8k prompt | 229 tok/s (14 ms) | **282 tok/s** (7 ms) | 1.23x |
-| 8 par, 8k prompt | **356 tok/s** (16 ms) | 301 tok/s (15 ms) | 0.85x |
-| 16 par, 8k prompt | **508 tok/s** (21 ms) | 301 tok/s (27 ms) | 0.59x |
-| 32k cold prefill | TTFT 6.5 s | TTFT 5.5 s | prefill is not drafted |
+| 1 req, 2k prompt | 82 tok/s (TPOT 11 ms) | **139** (6 ms) | 144 (5 ms) |
+| 1 req, 8k prompt | 73 tok/s (11 ms) | **133** (5 ms) | 133 (5 ms) |
+| 2 par, 8k prompt | 131 (14 ms) | **198** (7 ms) | 196 (7 ms) |
+| 4 par, 8k prompt | 229 (14 ms) | **265** (8 ms) | 282 (7 ms) |
+| 8 par, 8k prompt | 356 (16 ms) | 266 (9 ms) | 301 (15 ms) |
+| 16 par, 8k prompt | 508 (21 ms) | 264 (9 ms) | 301 (27 ms) |
+| KV pool (tokens) | 958,181 | **550,749** (2.10x) | 489,358 (1.87x) |
+| 32k cold prefill | TTFT 6.5 s | ~7 s | 5.5 s |
+
+The prod shape trades 12% of aggregate throughput above 4 concurrent for a TPOT
+that does not move under load: 9 ms at 16 concurrent against 27 ms with
+`max-num-seqs 16`. Requests beyond 4 queue instead of degrading. Both drafted
+shapes lose to plain decoding once the batch is large — spec decode buys latency
+here, not peak throughput.
 
 Acceptance length: **3.2-4.1 tokens per verification**, ~3.5 typical at 7 draft
-tokens, flat in concurrency (3.5 solo, 3.3 at 8, 3.4 at 16). The DFlash2 card
-reports 4.80 mean on `Qwen/Qwen3.8-27B`; the drafter was trained against the
-bf16 target and runs here against an NVFP4 one, which is the likeliest reason
-for the gap — untestable on 64 GB of VRAM, where the bf16 target does not fit.
-
-KV pool: 489,358 tokens with the drafter (util 0.88), 958,181 without (0.94).
-Startup ~4.5 min, of which ~70 s is CUDA-graph capture for target + drafter.
+tokens, flat in concurrency. The DFlash2 card reports 4.80 mean on
+`Qwen/Qwen3.8-27B`. The official FP8 target was measured (in the SGLang recipe,
+same drafter) at 3.0-3.6, so target quantization is *not* the explanation for
+the gap.
 
 **SGLang runs this drafter faster.** Same checkpoint, same drafter, in
-`../qwen3-27b-nvfp4-slang-dflash2-dual-5090`: 187 tok/s solo at 8k against 133
-here, and 624 at 8 concurrent against 301 — where this recipe is already behind
-its own no-drafter baseline. vLLM's DFlash2 path is days old; SGLang's DFlash
-lineage is a year older. This recipe is worth running for the 262k context with
-a full KV pool and the 16-concurrent shape, not for peak drafted throughput.
+`../qwen3-27b-nvfp4-slang-dflash2-dual-5090`: 187 tok/s solo at 8k and 624 at 8
+concurrent. vLLM's DFlash2 path is days old; SGLang's DFlash lineage is a year
+older. This recipe keeps prod because it holds 262k with a 2.10x KV pool and
+degrades gracefully past 4 concurrent — SGLang's shape is pinned at 8 running
+requests with a 250k pool.
+
+## Accuracy
+
+Shared suite (`../../tools/run_eval.sh`), card sampling (temperature 1.0,
+top_p 0.95, top_k 20), drafter enabled:
+
+| Check | Score | No answer extracted |
+|---|---|---|
+| perplexity canary (5.7k tokens) | ppl 20.38 | — |
+| gsm8k_cot_lite (200) | 0.9550 | 5 (2.5%) |
+
+Run: `../../tools/run_eval.sh http://localhost:8000 Qwen3.8-27B-NVFP4`
+
+The no-drafter 512k recipe scores ppl 19.69 and 0.9700 with 1 empty reply, on a
+different checkpoint (unsloth). 191/200 against 194/200 is noise at n=200; the
+five empty replies are the length tail, not corruption — replaying the first of
+them three times returns the right answer in 318, 440 and 1439 tokens with
+`finish_reason: stop`. Empty means the 8192-token budget went into the thinking
+trace, the failure mode `tools/README.md` already documents.
+
+Tool calling and the vision tower were verified on this build
+(`tools/test_tool_call.py`, `tools/test_vision.py`).
 
 ## Configuration notes
 
 | Setting | Value | Why |
 |---|---|---|
 | `HF_REPO_ID` | `Inferact/Qwen3.8-27B-NVFP4` | NVFP4 body with an **unquantized `lm_head`** |
-| `GPU_MEMORY_UTILIZATION` | 0.88 | 0.94 OOMs on the first GDN prefill; 0.88 is the first value tried that holds, not a measured ceiling |
+| `GPU_MEMORY_UTILIZATION` | 0.92 | holds at `max-num-seqs 4`; 0.94 was not retried at this shape |
+| `MAX_NUM_SEQS` | 4 | verify batch 4×8 instead of 16×8: flat TPOT, +13% KV pool |
 | `NUM_SPECULATIVE_TOKENS` | 7 | the drafter's block size is 8 |
 | `KV_CACHE_DTYPE` | `fp8_e4m3` | bf16 KV measured: same acceptance (3.47 vs 3.52), slower decode, and 262k no longer fits |
 | `MAX_MODEL_LEN` | 262144 | native, no YaRN overlay in this recipe |
@@ -84,14 +127,15 @@ a full KV pool and the 16-concurrent shape, not for peak drafted throughput.
   one. Both checkpoints used by the sibling recipes quantize `lm_head`
   (unsloth: FP8, RadixArk: NVFP4), so neither can serve DFlash2 — the engine
   fails at startup with `DFlash2 requires an unquantized target LM head`.
-  `Inferact/Qwen3.8-27B-NVFP4` keeps `lm_head` in bf16.
-- **0.88 is untuned.** With the drafter resident, 0.94 dies on the first GDN
-  prefill — `expandable_segments: memory mapping failed with OOM ... (free:
-  3801088)` inside `chunk_gated_delta_rule`, the four warmup requests answer 500
-  and the engine exits. 0.88 was the next value tried and it holds; 0.90 and 0.92
-  were never measured. At roughly 13k KV tokens per 0.01 of utilization, 0.92
-  would be worth ~+50k tokens of pool if it survives both the warmup and a
-  16-concurrent burst.
+- **Utilization is shape-dependent.** At `max-num-seqs 16`, 0.94 dies on the
+  first GDN prefill — `expandable_segments: memory mapping failed with OOM ...
+  (free: 3801088)` inside `chunk_gated_delta_rule`, the warmup requests answer
+  500, the engine exits. 0.88 holds there. At `max-num-seqs 4` the verify batch
+  is 4x smaller and 0.92 holds through the warmup, a 32k prefill and a
+  16-request burst; 0.94 at that shape was not tried.
+- **262k, not 512k.** The sibling recipe reaches 512k with a YaRN overlay. Here
+  the pool is 550,749 tokens: 512k would mean 1.05x concurrency, one full
+  request and no margin. Prod runs the native window.
 - **Why the image is a patched nightly.** vLLM 0.27.1 has DFlash1 but no
   DFlash2, and DFlash2 also needs the V2 model runner (`use_v2_model_runner`
   forces it, as for DSpark). The Dockerfile drops the PR diff onto the pinned
@@ -109,22 +153,27 @@ a full KV pool and the 16-concurrent shape, not for peak drafted throughput.
   requests sent together return 3 different completions, and a 9th sent alone
   returns a 4th. Spec-decode output diverging from no-spec output therefore says
   nothing about the accept rule.
+- **Give every experiment its own HF cache.** Pointing a test container at
+  another recipe's cache by repo id re-resolves `refs/main` against the Hub and
+  can leave a snapshot without weights behind — that is how the sibling recipe's
+  YaRN overlay was broken into a 37-restart crash loop on 2026-08-19.
 - The drafter gets no multimodal embeddings (vLLM warns at startup); vision
-  requests fall back to text-only drafting.
+  requests fall back to text-only drafting. The vision tower itself works.
 
 ## Files
 
 ```
 .
 ├── Dockerfile                    # pinned vLLM nightly + DFlash2 PRs
-├── .env.example                  # production defaults (copy to .env)
+├── .env.example                  # defaults (copy to .env); profiles override it
 ├── cache/huggingface/            # target + drafter, mounted (gitignored)
 ├── profiles/
-│   ├── dflash2-tp2.env           # default
+│   ├── dflash2-prod.env          # default: production shape, :8000
+│   ├── dflash2-tp2.env           # throughput shape, :8100
 │   └── nospec-tp2.env            # baseline, no drafter
 ├── scripts/
 │   ├── build.sh                  # docker build
-│   ├── start.sh                  # docker run + health wait (profile as $1)
+│   ├── start.sh                  # docker run + health wait + warmup (profile as $1)
 │   ├── stop.sh
 │   ├── download_model.sh         # optional weight pre-staging via the container
 │   └── bench.sh                  # speed suite + acceptance length per scenario
