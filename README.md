@@ -8,6 +8,7 @@ Tested, reproducible setups for serving self-hosted models. Each recipe ships a 
 |---|---|---|---|---|---|
 | [qwen3-27b-nvfp4-vllm-dual-5090](recipes/qwen3-27b-nvfp4-vllm-dual-5090/) | Qwen3.8-27B-NVFP4 (unsloth) | vLLM 0.27.1 | 96 tok/s | 368 tok/s | 512k (YaRN) |
 | [qwen3-27b-nvfp4-slang-dual-5090](recipes/qwen3-27b-nvfp4-slang-dual-5090/) | Qwen3.8-27B-NVFP4 (RadixArk) | SGLang + DSpark | 120-190 tok/s | 434 tok/s | 262k (native) |
+| [qwen3-27b-nvfp4-vllm-dflash2-dual-5090](recipes/qwen3-27b-nvfp4-vllm-dflash2-dual-5090/) | Qwen3.8-27B-NVFP4 (Inferact) | vLLM nightly + DFlash2 | 133-144 tok/s | 301 tok/s | 262k (native) |
 
 Hardware for both: 2× NVIDIA RTX 5090 (32 GB, sm_120), KVM VM, Docker + nvidia-container-toolkit.
 
