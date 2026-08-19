@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Start the vLLM + DFlash2 server (Docker) for Qwen3.8-27B-NVFP4 at 262k context.
 #
-# Usage: ./scripts/start.sh [profile.env]   (default: profiles/dflash2-prod.env)
+# Usage: ./scripts/start.sh [profile.env]   (default: profiles/dflash2-latency.env)
 # Config layers: .env -> profile (the profile wins; put variants in a profile
 # copy). Build the image first: ./scripts/build.sh
 
@@ -15,7 +15,7 @@ if [[ -f "${PROJECT_DIR}/.env" ]]; then
     set -a; source "${PROJECT_DIR}/.env"; set +a
 fi
 
-PROFILE="${1:-profiles/dflash2-prod.env}"
+PROFILE="${1:-profiles/dflash2-latency.env}"
 if [[ -f "${PROFILE}" ]]; then
     :
 elif [[ -f "${PROJECT_DIR}/${PROFILE}" ]]; then
