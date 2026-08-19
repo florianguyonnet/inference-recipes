@@ -50,6 +50,10 @@ scorer as an empty string and counts as wrong. Measured on Qwen3.8-27B-NVFP4:
 `mmlu_flan_cot_zeroshot` 0.6166 with 27% of replies stopped after 6-17 tokens,
 `aime25` 0.60 with 8/30 traces over the 32k budget.
 
+- `benchmark_agent.py` takes the token count from the stream's `usage` block
+  (`stream_options.include_usage`), not from the number of SSE chunks: under
+  speculative decoding one chunk carries a whole accepted block, and counting
+  chunks divides throughput — and multiplies TPOT — by the acceptance length.
 - Sampling: `temperature=1.0, top_p=0.95, top_k=20, min_p=0` (checkpoint card, thinking mode), same for every recipe. What a recipe pins as its own serving default is a separate decision.
 - `MMLU_PRO_STRIDE` sets the MMLU-Pro subset (48 → 251 questions). The test split is grouped by category, so `--limit` alone only samples `business`.
 - `probe_ppl.py` needs GPU headroom: `prompt_logprobs` allocates ~0.6 MB of fp32 logits per prompt token, and at `--gpu-memory-utilization 0.94` a 2.5k-token echo request OOMs the engine.

@@ -46,6 +46,7 @@ async def stream_completion(
     t0 = time.perf_counter()
     ttft = None
     token_times = []
+    usage_tokens = 0
 
     body = {
         "model": model,
@@ -57,6 +58,9 @@ async def stream_completion(
         # emit EOS after one token, and TPOT/throughput stop being comparable
         # between two serving configs.
         "ignore_eos": True,
+        # Speculative decoding emits several tokens in one SSE chunk, so chunks
+        # are not tokens: take the count from the server's usage block.
+        "stream_options": {"include_usage": True},
     }
 
     async with session.post(
@@ -83,6 +87,10 @@ async def stream_completion(
                 except json.JSONDecodeError:
                     continue
 
+                if data.get("usage"):
+                    usage_tokens = data["usage"]["completion_tokens"]
+                    continue
+
                 now = time.perf_counter()
                 if ttft is None:
                     ttft = now - t0
@@ -92,12 +100,10 @@ async def stream_completion(
         raise RuntimeError("No tokens received")
 
     total = time.perf_counter() - t0
-    n_tokens = len(token_times)
-    if n_tokens > 1:
-        intervals = [
-            token_times[i] - token_times[i - 1] for i in range(1, n_tokens)
-        ]
-        tpot = statistics.mean(intervals)
+    # Chunks, unless the server reported usage (see stream_options above).
+    n_tokens = usage_tokens or len(token_times)
+    if n_tokens > 1 and len(token_times) > 1:
+        tpot = (token_times[-1] - token_times[0]) / (n_tokens - 1)
     else:
         tpot = 0.0
 
