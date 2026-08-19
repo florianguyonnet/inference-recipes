@@ -18,29 +18,6 @@ latency, so the concurrent column is not their ceiling — see each README.
 
 Hardware for all of them: 2× NVIDIA RTX 5090 (32 GB, sm_120), KVM VM, Docker + nvidia-container-toolkit.
 
-## Interconnect: prefill is PCIe-bound on this box
-
-The two cards train up to PCIe Gen 5 under load but at **x4 (GPU 0) and x8
-(GPU 1)** of a possible x16. Measured all-reduce between them: **8.1 GiB/s**,
-identical with `NCCL_P2P_DISABLE=1` and without, so the flag the recipes set for
-KVM costs nothing — the x4 link is the ceiling.
-
-That ceiling lands on prefill, not decode. TP=2 exchanges 64 layers × 2
-all-reduces × 84 MiB = 10.5 GiB per 8192-token chunk, so a 32k prefill spends
-~5 s in communication alone. Measured, same checkpoint:
-
-| | TP=1, one card | TP=2 |
-|---|---|---|
-| 32k prefill TTFT | **3.61 s** | 5.3 s |
-| solo decode, 2k prompt | 66.1 tok/s | **96 tok/s** |
-| solo decode, 8k prompt | 62.5 tok/s | **87 tok/s** |
-
-One card prefills 32k faster than two. Decode goes the other way — comms is
-~1.5% of a decode step and TP=2 doubles the memory bandwidth — which is why
-every recipe here runs TP=2. On a x16/x16 link the communication term drops 4x
-and the TP=2 prefill numbers in these READMEs should improve; read them as
-lower bounds tied to this topology.
-
 ## Usage
 
 Each recipe is self-contained: copy its directory to the target machine and follow its README. Bench and evaluation clients are shared in `tools/` and work against any OpenAI-compatible server, so every recipe is measured with the same protocol.
