@@ -74,7 +74,7 @@ a full KV pool and the 16-concurrent shape, not for peak drafted throughput.
 | Setting | Value | Why |
 |---|---|---|
 | `HF_REPO_ID` | `Inferact/Qwen3.8-27B-NVFP4` | NVFP4 body with an **unquantized `lm_head`** |
-| `GPU_MEMORY_UTILIZATION` | 0.88 | 0.94 OOMs on the first GDN prefill |
+| `GPU_MEMORY_UTILIZATION` | 0.88 | 0.94 OOMs on the first GDN prefill; 0.88 is the first value tried that holds, not a measured ceiling |
 | `NUM_SPECULATIVE_TOKENS` | 7 | the drafter's block size is 8 |
 | `KV_CACHE_DTYPE` | `fp8_e4m3` | bf16 KV measured: same acceptance (3.47 vs 3.52), slower decode, and 262k no longer fits |
 | `MAX_MODEL_LEN` | 262144 | native, no YaRN overlay in this recipe |
@@ -85,6 +85,13 @@ a full KV pool and the 16-concurrent shape, not for peak drafted throughput.
   (unsloth: FP8, RadixArk: NVFP4), so neither can serve DFlash2 — the engine
   fails at startup with `DFlash2 requires an unquantized target LM head`.
   `Inferact/Qwen3.8-27B-NVFP4` keeps `lm_head` in bf16.
+- **0.88 is untuned.** With the drafter resident, 0.94 dies on the first GDN
+  prefill — `expandable_segments: memory mapping failed with OOM ... (free:
+  3801088)` inside `chunk_gated_delta_rule`, the four warmup requests answer 500
+  and the engine exits. 0.88 was the next value tried and it holds; 0.90 and 0.92
+  were never measured. At roughly 13k KV tokens per 0.01 of utilization, 0.92
+  would be worth ~+50k tokens of pool if it survives both the warmup and a
+  16-concurrent burst.
 - **Why the image is a patched nightly.** vLLM 0.27.1 has DFlash1 but no
   DFlash2, and DFlash2 also needs the V2 model runner (`use_v2_model_runner`
   forces it, as for DSpark). The Dockerfile drops the PR diff onto the pinned
