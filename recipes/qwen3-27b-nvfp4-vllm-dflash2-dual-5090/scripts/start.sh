@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Start the vLLM + DFlash2 server (Docker) for Qwen3.8-27B-NVFP4 at 262k context.
 #
-# Usage: ./scripts/start.sh [profile.env]   (default: profiles/dflash2-latency.env)
+# Usage: ./scripts/start.sh [profile.env]   (default: profiles/dflash2-512k.env)
 # Config layers: .env -> profile (the profile wins; put variants in a profile
 # copy). Build the image first: ./scripts/build.sh
 
@@ -15,7 +15,7 @@ if [[ -f "${PROJECT_DIR}/.env" ]]; then
     set -a; source "${PROJECT_DIR}/.env"; set +a
 fi
 
-PROFILE="${1:-profiles/dflash2-latency.env}"
+PROFILE="${1:-profiles/dflash2-512k.env}"
 if [[ -f "${PROFILE}" ]]; then
     :
 elif [[ -f "${PROJECT_DIR}/${PROFILE}" ]]; then
@@ -35,6 +35,17 @@ PORT="${VLLM_PORT:-8100}"
 MODEL="${HF_REPO_ID:-Inferact/Qwen3.8-27B-NVFP4}"
 mkdir -p "${HOST_HF}"
 
+# Optional overlays, built inside the mounted cache so the snapshots stay pristine.
+DRAFT_PATH="${DRAFT_REPO_ID:-incoai/Qwen3.8-27B-DFlash2}"
+if [[ "${YARN_OVERLAY:-0}" == "1" ]]; then
+    "${SCRIPT_DIR}/make_yarn_overlay.sh" "${MODEL}"
+    MODEL="/root/.cache/huggingface/overlay-yarn512k"
+fi
+if [[ "${DRAFTER_OVERLAY:-0}" == "1" ]]; then
+    "${SCRIPT_DIR}/make_drafter_overlay.sh" "${DRAFT_PATH}"
+    DRAFT_PATH="/root/.cache/huggingface/overlay-drafter-512k"
+fi
+
 if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
     echo "ERROR: image ${IMAGE} not found. Run ./scripts/build.sh first."
     exit 1
@@ -47,6 +58,20 @@ if docker ps -a --format '{{.Names}}' | grep -qx "${NAME}"; then
     fi
     echo "==> Removing stopped container ${NAME}"
     docker rm "${NAME}" >/dev/null
+fi
+
+# RESTART_POLICY defaults to "no": this recipe is used to try configurations
+# that fail, and a failed start must stay failed instead of looping against
+# whatever owns the cards. A serving profile sets it to unless-stopped.
+# The guard below refuses to start when the GPUs are taken. FORCE=1 to override.
+if [[ "${FORCE:-0}" != "1" ]]; then
+    BUSY="$(nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader 2>/dev/null | head -4)"
+    if [[ -n "${BUSY}" ]]; then
+        echo "ERROR: the GPUs are already in use:"
+        echo "${BUSY}" | sed 's/^/       /'
+        echo "       stop that server first (or FORCE=1 to try anyway)."
+        exit 1
+    fi
 fi
 
 ARGS=(
@@ -71,7 +96,7 @@ if [[ "${SPEC:-on}" != "off" ]]; then
     # A profile can set SPECULATIVE_CONFIG to the full JSON instead.
     SPEC_JSON="${SPECULATIVE_CONFIG:-}"
     if [[ -z "${SPEC_JSON}" ]]; then
-        SPEC_JSON="{\"method\": \"dflash\", \"model\": \"${DRAFT_REPO_ID:-incoai/Qwen3.8-27B-DFlash2}\", \"num_speculative_tokens\": ${NUM_SPECULATIVE_TOKENS:-7}}"
+        SPEC_JSON="{\"method\": \"dflash\", \"model\": \"${DRAFT_PATH}\", \"num_speculative_tokens\": ${NUM_SPECULATIVE_TOKENS:-7}}"
     fi
     ARGS+=(--speculative-config "${SPEC_JSON}")
 fi
@@ -85,7 +110,7 @@ docker run -d \
     --name "${NAME}" \
     --network host \
     --ipc host \
-    --restart unless-stopped \
+    --restart "${RESTART_POLICY:-no}" \
     --health-cmd "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:${PORT}/health', timeout=5)\"" \
     --health-interval 30s \
     --health-timeout 10s \
